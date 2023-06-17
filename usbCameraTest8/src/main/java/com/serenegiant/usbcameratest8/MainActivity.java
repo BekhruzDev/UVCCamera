@@ -24,10 +24,10 @@
 package com.serenegiant.usbcameratest8;
 
 import android.animation.Animator;
+import android.annotation.SuppressLint;
 import android.graphics.SurfaceTexture;
 import android.hardware.usb.UsbDevice;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
 import android.util.Log;
 import android.view.Surface;
 import android.view.View;
@@ -38,6 +38,8 @@ import android.widget.ImageButton;
 import android.widget.SeekBar;
 import android.widget.Toast;
 import android.widget.ToggleButton;
+
+import androidx.annotation.NonNull;
 
 import com.serenegiant.common.BaseActivity;
 
@@ -163,6 +165,7 @@ public final class MainActivity extends BaseActivity implements CameraDialog.Cam
 		super.onStop();
 	}
 
+	@SuppressLint("SuspiciousIndentation")
 	@Override
 	public void onDestroy() {
 		if (DEBUG) Log.v(TAG, "onDestroy:");

@@ -43,6 +43,7 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.os.Build;
 import android.os.Handler;
 import android.text.TextUtils;
 import android.util.Log;
@@ -161,15 +162,24 @@ public final class USBMonitor {
 	 * register BroadcastReceiver to monitor USB events
 	 * @throws IllegalStateException
 	 */
+	@SuppressLint("WrongConstant")
 	public synchronized void register() throws IllegalStateException {
 		if (destroyed) throw new IllegalStateException("already destroyed");
 		if (mPermissionIntent == null) {
 			if (DEBUG) Log.i(TAG, "register:");
 			final Context context = mWeakContext.get();
 			if (context != null) {
-				mPermissionIntent = PendingIntent.getBroadcast(context, 0, new Intent(ACTION_USB_PERMISSION), 0);
-				final IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+				if (Build.VERSION.SDK_INT >= 31) {
+					// avoid acquiring intent data failed in receiver on Android12
+					// when using PendingIntent.FLAG_IMMUTABLE
+					// because it means Intent can't be modified anywhere -- jiangdg/20220929
+					int PENDING_FLAG_IMMUTABLE = 1<<25;
+					mPermissionIntent = PendingIntent.getBroadcast(context, 0, new Intent(ACTION_USB_PERMISSION), PENDING_FLAG_IMMUTABLE);
+				} else {
+					mPermissionIntent = PendingIntent.getBroadcast(context, 0, new Intent(ACTION_USB_PERMISSION), 0);
+				}				final IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
 				// ACTION_USB_DEVICE_ATTACHED never comes on some devices so it should not be added here
+				filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
 				filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
 				context.registerReceiver(mUsbReceiver, filter);
 			}
@@ -396,16 +406,21 @@ public final class USBMonitor {
 	 * @return hasPermission
 	 */
 	private boolean updatePermission(final UsbDevice device, final boolean hasPermission) {
-		final int deviceKey = getDeviceKey(device, true);
-		synchronized (mHasPermissions) {
-			if (hasPermission) {
-				if (mHasPermissions.get(deviceKey) == null) {
-					mHasPermissions.put(deviceKey, new WeakReference<UsbDevice>(device));
+		try {
+			final int deviceKey = getDeviceKey(device, true);
+			synchronized (mHasPermissions) {
+				if (hasPermission) {
+					if (mHasPermissions.get(deviceKey) == null) {
+						mHasPermissions.put(deviceKey, new WeakReference<UsbDevice>(device));
+					}
+				} else {
+					mHasPermissions.remove(deviceKey);
 				}
-			} else {
-				mHasPermissions.remove(deviceKey);
 			}
+		} catch (SecurityException e) {
+
 		}
+
 		return hasPermission;
 	}
 
@@ -660,7 +675,8 @@ public final class USBMonitor {
 		if (useNewAPI && BuildCheck.isAndroid5()) {
 			sb.append("#");
 			if (TextUtils.isEmpty(serial)) {
-				sb.append(device.getSerialNumber());	sb.append("#");	// API >= 21
+				try { sb.append(device.getSerialNumber());	sb.append("#");	} // API >= 21 & targetSdkVersion has to be <= 28
+				catch(SecurityException ignore) {}
 			}
 			sb.append(device.getManufacturerName());	sb.append("#");	// API >= 21
 			sb.append(device.getConfigurationCount());	sb.append("#");	// API >= 21
@@ -893,7 +909,9 @@ public final class USBMonitor {
 				info.serial = device.getSerialNumber();
 			}
 			if (BuildCheck.isMarshmallow()) {
-				info.usb_version = device.getVersion();
+				if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+					info.usb_version = device.getVersion();
+				}
 			}
 			if ((manager != null) && manager.hasPermission(device)) {
 				final UsbDeviceConnection connection = manager.openDevice(device);
@@ -971,6 +989,14 @@ public final class USBMonitor {
 			mWeakMonitor = new WeakReference<USBMonitor>(monitor);
 			mWeakDevice = new WeakReference<UsbDevice>(device);
 			mConnection = monitor.mUsbManager.openDevice(device);
+			if (mConnection == null) {
+				try {
+					Thread.sleep(500);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+				mConnection = monitor.mUsbManager.openDevice(device);
+			}
 			mInfo = updateDeviceInfo(monitor.mUsbManager, device, null);
 			final String name = device.getDeviceName();
 			final String[] v = !TextUtils.isEmpty(name) ? name.split("/") : null;
@@ -1006,8 +1032,15 @@ public final class USBMonitor {
 			}
 			mConnection = monitor.mUsbManager.openDevice(device);
 			if (mConnection == null) {
-				throw new IllegalStateException("device may already be removed or have no permission");
-			}
+				try {
+					Thread.sleep(500);
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+				mConnection = monitor.mUsbManager.openDevice(device);
+				if (mConnection == null) {
+					throw new IllegalStateException("openDevice failed. device may already be removed or have no permission, dev = " + device);
+				}			}
 			mInfo = updateDeviceInfo(monitor.mUsbManager, device, null);
 			mWeakMonitor = new WeakReference<USBMonitor>(monitor);
 			mWeakDevice = new WeakReference<UsbDevice>(device);
